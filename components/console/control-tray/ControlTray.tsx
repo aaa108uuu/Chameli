@@ -20,9 +20,7 @@
 
 import cn from 'classnames';
 
-// FIX: Import React to bring React.CSSProperties into scope.
-import React, { memo, ReactNode, useEffect, useRef, useState } from 'react';
-import { AudioRecorder } from '../../../lib/audio-recorder';
+import React, { memo, ReactNode, useEffect, useRef } from 'react';
 import { useSettings, useTools, useLogStore } from '@/lib/state';
 
 import { useLiveAPIContext } from '../../../contexts/LiveAPIContext';
@@ -32,58 +30,19 @@ export type ControlTrayProps = {
 };
 
 function ControlTray({ children }: ControlTrayProps) {
-  const [audioRecorder] = useState(() => new AudioRecorder());
-  const [muted, setMuted] = useState(false);
-  const [volume, setVolume] = useState(0);
   const connectButtonRef = useRef<HTMLButtonElement>(null);
-
-  const { client, connected, connect, disconnect } = useLiveAPIContext();
+  const { connected, connect, disconnect, muted, toggleMute, volume } =
+    useLiveAPIContext();
 
   useEffect(() => {
-    // FIX: Cannot find name 'connectButton'. Did you mean 'connectButtonRef'?
     if (!connected && connectButtonRef.current) {
-      // FIX: Cannot find name 'connectButton'. Did you mean 'connectButtonRef'?
       connectButtonRef.current.focus();
     }
   }, [connected]);
 
-  useEffect(() => {
-    if (!connected) {
-      setMuted(false);
-    }
-  }, [connected]);
-
-  useEffect(() => {
-    const onData = (base64: string) => {
-      client.sendRealtimeInput([
-        {
-          mimeType: 'audio/pcm;rate=16000',
-          data: base64,
-        },
-      ]);
-    };
-
-    const onVolume = (vol: number) => {
-      setVolume(vol);
-    };
-
-    if (connected && !muted && audioRecorder) {
-      audioRecorder.on('data', onData);
-      audioRecorder.on('volume', onVolume);
-      audioRecorder.start();
-    } else {
-      audioRecorder.stop();
-      setVolume(0);
-    }
-    return () => {
-      audioRecorder.off('data', onData);
-      audioRecorder.off('volume', onVolume);
-    };
-  }, [connected, client, muted, audioRecorder]);
-
   const handleMicClick = () => {
     if (connected) {
-      setMuted(!muted);
+      toggleMute();
     } else {
       connect();
     }

@@ -35,12 +35,9 @@ function arrayBufferToBase64(buffer: ArrayBuffer) {
   return window.btoa(binary);
 }
 
-// FIX: Refactored to use composition over inheritance for EventEmitter
 export class AudioRecorder {
-  // FIX: Use an internal EventEmitter instance
   private emitter = new EventEmitter();
 
-  // FIX: Expose on/off methods
   public on = this.emitter.on.bind(this.emitter);
   public off = this.emitter.off.bind(this.emitter);
 
@@ -56,66 +53,75 @@ export class AudioRecorder {
   constructor(public sampleRate = 16000) {}
 
   async start() {
+    if (this.recording) return;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       throw new Error('Could not request user media');
     }
 
     this.starting = new Promise(async (resolve, reject) => {
-      this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      this.audioContext = await audioContext({ sampleRate: this.sampleRate });
-      this.source = this.audioContext.createMediaStreamSource(this.stream);
+      try {
+        this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        this.audioContext = await audioContext({ sampleRate: this.sampleRate });
+        this.source = this.audioContext.createMediaStreamSource(this.stream);
 
-      const workletName = 'audio-recorder-worklet';
-      const src = createWorketFromSrc(workletName, AudioRecordingWorklet);
+        const workletName = 'audio-recorder-worklet';
+        const src = createWorketFromSrc(workletName, AudioRecordingWorklet);
 
-      await this.audioContext.audioWorklet.addModule(src);
-      this.recordingWorklet = new AudioWorkletNode(
-        this.audioContext,
-        workletName
-      );
+        await this.audioContext.audioWorklet.addModule(src);
+        this.recordingWorklet = new AudioWorkletNode(
+          this.audioContext,
+          workletName
+        );
 
-      this.recordingWorklet.port.onmessage = async (ev: MessageEvent) => {
-        // Worklet processes recording floats and messages converted buffer
-        const arrayBuffer = ev.data.data.int16arrayBuffer;
+        this.recordingWorklet.port.onmessage = async (ev: MessageEvent) => {
+          // Worklet processes recording floats and messages converted buffer
+          const arrayBuffer = ev.data.data.int16arrayBuffer;
 
-        if (arrayBuffer) {
-          const arrayBufferString = arrayBufferToBase64(arrayBuffer);
-          // FIX: Changed this.emit to this.emitter.emit
-          this.emitter.emit('data', arrayBufferString);
-        }
-      };
-      this.source.connect(this.recordingWorklet);
+          if (arrayBuffer) {
+            const arrayBufferString = arrayBufferToBase64(arrayBuffer);
+            this.emitter.emit('data', arrayBufferString);
+          }
+        };
+        this.source.connect(this.recordingWorklet);
 
-      // vu meter worklet
-      const vuWorkletName = 'vu-meter';
-      await this.audioContext.audioWorklet.addModule(
-        createWorketFromSrc(vuWorkletName, VolMeterWorket)
-      );
-      this.vuWorklet = new AudioWorkletNode(this.audioContext, vuWorkletName);
-      this.vuWorklet.port.onmessage = (ev: MessageEvent) => {
-        // FIX: Changed this.emit to this.emitter.emit
-        this.emitter.emit('volume', ev.data.volume);
-      };
+        // vu meter worklet
+        const vuWorkletName = 'vu-meter';
+        await this.audioContext.audioWorklet.addModule(
+          createWorketFromSrc(vuWorkletName, VolMeterWorket)
+        );
+        this.vuWorklet = new AudioWorkletNode(this.audioContext, vuWorkletName);
+        this.vuWorklet.port.onmessage = (ev: MessageEvent) => {
+          this.emitter.emit('volume', ev.data.volume);
+        };
 
-      this.source.connect(this.vuWorklet);
-      this.recording = true;
-      resolve();
-      this.starting = null;
+        this.source.connect(this.vuWorklet);
+        this.recording = true;
+        resolve();
+      } catch (err) {
+        console.error("Error starting audio recorder:", err);
+        this.stop();
+        reject(err);
+      } finally {
+        this.starting = null;
+      }
     });
+    await this.starting;
   }
 
   stop() {
     // It is plausible that stop would be called before start completes,
     // such as if the Websocket immediately hangs up
     const handleStop = () => {
+      this.recording = false;
       this.source?.disconnect();
       this.stream?.getTracks().forEach(track => track.stop());
       this.stream = undefined;
       this.recordingWorklet = undefined;
       this.vuWorklet = undefined;
     };
+
     if (this.starting) {
-      this.starting.then(handleStop);
+      this.starting.then(handleStop, handleStop); // Handle both success and failure of starting
       return;
     }
     handleStop();

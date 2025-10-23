@@ -20,11 +20,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { GenAILiveClient } from '../../lib/genai-live-client';
-import { LiveConnectConfig, Modality, LiveServerToolCall } from '@google/genai';
+import { LiveConnectConfig, LiveServerToolCall } from '@google/genai';
 import { AudioStreamer } from '../../lib/audio-streamer';
 import { audioContext } from '../../lib/utils';
 import VolMeterWorket from '../../lib/worklets/vol-meter';
 import { useLogStore, useSettings } from '@/lib/state';
+import { AudioRecorder } from '@/lib/audio-recorder';
 
 export type UseLiveApiResults = {
   client: GenAILiveClient;
@@ -36,6 +37,8 @@ export type UseLiveApiResults = {
   connected: boolean;
 
   volume: number;
+  muted: boolean;
+  toggleMute: () => void;
 };
 
 export function useLiveApi({
@@ -47,10 +50,12 @@ export function useLiveApi({
   const client = useMemo(() => new GenAILiveClient(apiKey, model), [apiKey, model]);
 
   const audioStreamerRef = useRef<AudioStreamer | null>(null);
+  const audioRecorderRef = useRef<AudioRecorder>(new AudioRecorder());
 
   const [volume, setVolume] = useState(0);
   const [connected, setConnected] = useState(false);
   const [config, setConfig] = useState<LiveConnectConfig>({});
+  const [muted, setMuted] = useState(false);
 
   // register audio for streaming server -> speakers
   useEffect(() => {
@@ -59,7 +64,10 @@ export function useLiveApi({
         audioStreamerRef.current = new AudioStreamer(audioCtx);
         audioStreamerRef.current
           .addWorklet<any>('vumeter-out', VolMeterWorket, (ev: any) => {
-            setVolume(ev.data.volume);
+            // Only update volume if we are not muted, otherwise it is confusing
+            if (!muted) {
+              setVolume(ev.data.volume);
+            }
           })
           .then(() => {
             // Successfully added worklet
@@ -69,7 +77,33 @@ export function useLiveApi({
           });
       });
     }
-  }, [audioStreamerRef]);
+  }, [audioStreamerRef, muted]);
+
+  // Microphone recording setup
+  useEffect(() => {
+    const audioRecorder = audioRecorderRef.current;
+    const onData = (base64: string) => {
+      client.sendRealtimeInput([
+        {
+          mimeType: 'audio/pcm;rate=16000',
+          data: base64,
+        },
+      ]);
+    };
+
+    const onVolume = (vol: number) => {
+      setVolume(vol);
+    };
+
+    audioRecorder.on('data', onData);
+    audioRecorder.on('volume', onVolume);
+
+    return () => {
+      audioRecorder.off('data', onData);
+      audioRecorder.off('volume', onVolume);
+    };
+  }, [client]);
+
 
   useEffect(() => {
     const onOpen = () => {
@@ -154,13 +188,31 @@ export function useLiveApi({
       throw new Error('config has not been set');
     }
     client.disconnect();
-    await client.connect(config);
-  }, [client, config]);
+    const connected = await client.connect(config);
+    if (connected && !muted) {
+      audioRecorderRef.current.start();
+    }
+  }, [client, config, muted]);
 
   const disconnect = useCallback(async () => {
     client.disconnect();
     setConnected(false);
+    audioRecorderRef.current.stop();
+    setVolume(0);
   }, [setConnected, client]);
+
+  const toggleMute = useCallback(() => {
+    const newMuted = !muted;
+    setMuted(newMuted);
+    if (connected) {
+      if (newMuted) {
+        audioRecorderRef.current.stop();
+        setVolume(0);
+      } else {
+        audioRecorderRef.current.start();
+      }
+    }
+  }, [muted, connected]);
 
   return {
     client,
@@ -170,5 +222,7 @@ export function useLiveApi({
     connected,
     disconnect,
     volume,
+    muted,
+    toggleMute,
   };
 }

@@ -26,11 +26,9 @@ import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import { LiveAPIProvider } from './contexts/LiveAPIContext';
 
-const API_KEY = process.env.GEMINI_API_KEY as string;
+const API_KEY = process.env.API_KEY as string;
 if (typeof API_KEY !== 'string') {
-  throw new Error(
-    'Missing required environment variable: REACT_APP_GEMINI_API_KEY'
-  );
+  throw new Error('Missing required environment variable: API_KEY');
 }
 
 /**
@@ -48,7 +46,6 @@ function App() {
           <main>
             <div className="main-app-area">
               <StreamingConsole />
-
             </div>
 
             <ControlTray></ControlTray>
